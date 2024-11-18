@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import BatchNorm1d
 from torch.nn.init import xavier_normal_, kaiming_normal_
 
+
 def get_stable_matrix(A):
     """
     Rescales the input matrix so that all eigenvalues <= 1
@@ -28,6 +29,20 @@ def create_block_diagonal_matrix(rows, columns):
         blocks.append(row)
     
     return torch.stack(blocks)
+
+def create_ei_mask(hidden_size, e_size):
+    """
+    creates a mask for the reccurent hidden layer connections in the EI GRU model. The mask ensures that the hidden layer
+    is composed of excitatory and inhibitory units only, with the excitatory units in the first e_size columns and the inhibitory
+    units in the remaining columns.
+    """
+    mask = torch.ones(hidden_size, hidden_size) - torch.eye(hidden_size)
+    # Making inhibitory columns negative
+    mask[:, e_size:] *= -1
+    # making a parameter in case we want to access it later and to explicitly state that it is not a learnable parameter
+    mask = nn.Parameter(mask, requires_grad=False)
+    
+    return mask
 
 
 class Light_GRU(nn.Module):
@@ -108,12 +123,42 @@ class ENU_Light_GRU(Light_GRU):
         self.Wh_in = nn.Parameter(create_block_diagonal_matrix(hidden_size, unit_input_size*hidden_size))
         # mask for the block diagonal matrix to ensure that initially zero weights remain zero during training
         self.Wh_in_mask = nn.Parameter((self.Wh_in != 0).float(), requires_grad=False)
+
         
     def recurrent_step(self, input, hidden):
         """light GRU timestep with embedded neuron units"""
-        z_t = self.gate_act(self.bn_z(self.Wzx @ input) + self.Uz @ hidden)
-        h_in = self.unit_act(self.Whx @ input + self.b_unit) # layer forming the input to the units
-        h_ungated = self.hidden_act(self.bn_h((self.Wh_in * self.Wh_in_mask) @ h_in) + self.Uh @ (hidden)) # masking ensures units remain independent
+        z_t = self.gate_act(self.bn_z(input @ self.Wzx.T) + hidden @ self.Uz.T)
+        h_in = self.unit_act(input @ self.Whx.T + self.b_unit) # layer forming the input to the units
+        h_ungated = self.hidden_act(self.bn_h(h_in @ (self.Wh_in * self.Wh_in_mask).T) + hidden @ self.Uh.T) # masking ensures units remain independent
+        h_t = z_t * hidden + (1 - z_t) * h_ungated
+        return h_t
+  
+
+class EI_Light_GRU(Light_GRU):
+    """
+    Light GRU model with E-I linear transformation in the hidden layer
+    """
+    def __init__(self, input_size, hidden_size, e_prop):
+        """
+        Args:
+        ------
+        input_size: int, size of the input vector.
+        hidden_size: int, size of the hidden state vector.
+        e_prop: float between 0 and 1, the proportion of excitatory units.
+        """
+        super().__init__(input_size, hidden_size)
+        self.e_prop = e_prop
+        self.e_size = int(e_prop * hidden_size) # Number of excitatory units
+        self.i_size = hidden_size - self.e_size # Number of inhibitory units
+
+        # creating the mask for the reccurrent hidden layer connections, which ensures that the ANs are either excitatory or inhibitory
+        self.mask = create_ei_mask(hidden_size, self.e_size)
+        print("EI mask check", self.mask)
+
+    def recurrent_step(self, input, hidden):
+        """light GRU timestep with E-I linear transformation"""
+        z_t = self.gate_act(self.bn_z(input @ self.Wzx.T) +  hidden @ self.Uz.T)
+        h_ungated = self.hidden_act(self.bn_h(input @ self.Whx.T) + hidden @ (self.Uh*self.mask).T)
         h_t = z_t * hidden + (1 - z_t) * h_ungated
         return h_t
 
@@ -122,16 +167,20 @@ class GRU_Net(nn.Module):
     """
     GRU based model supporting different reccurent GRU architectures and with output layer for classification tasks
     """
-    def __init__(self, input_size, hidden_size, output_size, model_type='light', unit_input_size=None):
+    def __init__(self, input_size, hidden_size, output_size, model_type='light', unit_input_size=None, e_prop=0.75):
         """
         args:
         -----
         input_size: int - size of the input vector
         hidden_size: int - size of the hidden state vector
         output_size: int - number of output classes
+        
+        optional:
+        ---------
         model_type: str - type of GRU model to use, either 'light' or 'enu_light'
         unit_input_size: int - number of input features associated with each embedded neuron unit. 
                         Used if the model type is 'enu_light'
+        e_prop: float - proportion of excitatory units in the hidden layer. Used if the model type is 'ei_light'
         """
         super().__init__()
         self.input_size = input_size
@@ -139,22 +188,26 @@ class GRU_Net(nn.Module):
         self.output_size = output_size
         self.model_type = model_type
         self.unit_input_size = unit_input_size
-        
+
         if model_type == 'light':
             self.gru = Light_GRU(input_size, hidden_size)
         elif model_type == 'enu_light':
             self.gru = ENU_Light_GRU(input_size, hidden_size, unit_input_size)
+        elif model_type == 'ei_light':
+            self.gru = EI_Light_GRU(input_size, hidden_size, e_prop)
         else:
             raise ValueError("Invalid model type")
         
         self.fc = nn.Linear(hidden_size, output_size)
-        # self.softmax = nn.Softmax(dim=1)
     
-    def forward(self, input, hidden=None):
+    def forward(self, input, hidden=None, return_hidden=False):
         hidden_timeseries, _ = self.gru(input, hidden)
         logits = self.fc(hidden_timeseries)
         
-        return logits
+        if return_hidden:
+            return logits, hidden_timeseries
+        else:
+            return logits
 
 
 
