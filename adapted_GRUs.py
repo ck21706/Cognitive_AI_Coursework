@@ -208,6 +208,17 @@ class GRU_Net(nn.Module):
             return logits, hidden_timeseries
         else:
             return logits
+    
+    def predict(self, input, hidden=None):
+        """
+        returns predicted class for each timestep and batch in the input sequence of shape input = (seq_len, batch_size, input_size)
+        """
+        with torch.no_grad():
+            logits = self.forward(input, hidden)
+            pred_probs = torch.nn.functional.softmax(logits, dim=2)
+            pred_labels = torch.argmax(pred_probs, dim=2)
+            
+        return pred_labels
 
 
 
