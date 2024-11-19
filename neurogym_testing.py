@@ -151,15 +151,17 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     _, hidden_activations = net(inputs, return_hidden=True)
     hidden_activations = hidden_activations.cpu().detach().numpy()
     pred_label = net.predict(inputs).cpu().detach().numpy()
-    hidden_activations = hidden_activations.squeeze()
+    pred_label = pred_label.squeeze()
+    hidden_activations = hidden_activations.squeeze() # squeezing to get shape (seq_len, hidden_size)
+    print("prediction and hidden activation shape:", pred_label.shape, hidden_activations.shape)
 
     # plotting histogram of hidden activation magnitudes for the entire trial
-    print(hidden_activations.shape)
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
     ax.hist(hidden_activations.flatten(), bins=50)
     ax.set_title('Histogram of hidden activations', fontsize=fs)
     ax.set_xlabel('Activation magnitude', fontsize=fs)
     ax.set_ylabel('Frequency', fontsize=fs)
+    ax.set_yscale('log')
 
     plt.show(block=False)
 
@@ -171,8 +173,71 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     ax.set_xlabel('Unit', fontsize=fs)
     ax.set_ylabel('Activation magnitude', fontsize=fs)
 
-    plt.show(block=True)
+    plt.show(block=False)
 
+    # determining the action/inaction selctivity of each unit
+
+    # there are three actions, two of which are active (accept/reject), the third is passive (do nothing). 
+    # so we can group the actions into active and passive
+    hidden_active = hidden_activations[np.where(pred_label != 0)[0], :]
+    hidden_passive = hidden_activations[np.where(pred_label == 0)[0], :]
+    
+    mean_active = np.mean(hidden_active, axis=0)
+    mean_passive = np.mean(hidden_passive, axis=0)
+    std_active = np.std(hidden_active, axis=0)
+    std_passive = np.std(hidden_passive, axis=0)
+
+    # calculating selectivity: positive values indicate a neuron is selective for active actions, negative values indicate selectivity for passive actions
+    active_inactive_selectivity = (mean_active - mean_passive) / np.sqrt((std_active**2 + std_passive**2)/2)
+    
+    # plotting
+    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+    axs[0].bar(np.arange(len(active_inactive_selectivity)), active_inactive_selectivity)
+    axs[0].set_title('Action(positive)/Inaction(negative) selectivity of each unit', fontsize=fs)
+    axs[0].set_ylabel('Selectivity', fontsize=fs)
+
+    # we can repeat this, but this time looking at the reject and accept action selectivity
+    hidden_accept = hidden_activations[np.where(pred_label == 2)[0], :]
+    hidden_reject = hidden_activations[np.where(pred_label == 1)[0], :]
+
+    mean_accept = np.mean(hidden_accept, axis=0)
+    mean_reject = np.mean(hidden_reject, axis=0)
+    std_accept = np.std(hidden_accept, axis=0)
+    std_reject = np.std(hidden_reject, axis=0)
+
+    # calculating selectivity: positive values indicate a neuron is selective for accepting actions, negative values indicate selectivity for rejecting actions
+    accept_reject_selectivity = (mean_accept - mean_reject) / np.sqrt((std_accept**2 + std_reject**2)/2)
+
+    # plotting
+    colors = ['red' if s > 0 else 'grey' for s in active_inactive_selectivity]
+    axs[1].bar(np.arange(len(accept_reject_selectivity)), accept_reject_selectivity, color=colors)
+    axs[1].set_title('Accept/Reject selectivity of each unit', fontsize=fs)
+    axs[1].set_xlabel('Unit', fontsize=fs)
+    axs[1].set_ylabel('Selectivity', fontsize=fs)
+    # Add legend to explain colors
+    import matplotlib.patches as mpatches
+    red_patch = mpatches.Patch(color='red', label='Action selective')
+    grey_patch = mpatches.Patch(color='grey', label='Inaction selective')
+    axs[1].legend(handles=[red_patch, grey_patch], fontsize=fs)
+    
+    plt.tight_layout()
+    plt.show(block=False)
+
+    # now lets plot the timeseries activity of the most selective unit
+
+    most_selective_unit = np.argmax(np.abs(active_inactive_selectivity))
+
+    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+    axs[0].plot(hidden_activations[:, most_selective_unit])
+    axs[0].set_title(f'Timeseries activity of most selective unit {most_selective_unit}', fontsize=fs)
+    axs[0].set_ylabel('Activation magnitude', fontsize=fs)
+    axs[0].set_xlim([0, len(hidden_activations)])
+
+    visualise_task_data(inputs, ax=axs[1], fs=fs)
+    axs[1].set_title('', fontsize=fs)
+    axs[1].set_ylabel('', fontsize=fs)
+
+    plt.show(block=True)
 
 
 
@@ -193,5 +258,6 @@ if __name__ == "__main__":
     #                        plot_to_epoch = 500, log_scale=False)
     # visualise_task_performance([r"runs\light_GRU_run2", r"runs\enu_light_GRU_run2", r"runs\ei_light_GRU_run2"], seq_len=125)
     visualise_hidden_activations(r"runs\light_GRU_run2", seq_len=300, fs=16)
-
-    #
+    # visualise_hidden_activations(r"runs\ei_light_GRU_run2", seq_len=300, fs=16)
+    # visualise_hidden_activations(r"runs\ei_light_GRU_with_l2reg", seq_len=300, fs=16)
+    
