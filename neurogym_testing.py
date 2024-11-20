@@ -396,11 +396,11 @@ def find_fixed_points(model_dir, seq_len=100):
     plt.show()
 
 
-def PCA_analysis_hidden_activations(model_dir, train_seq_len=1000, test_seq_len=75, dims=3):
-    # loading model
-    net, name = initialize_model_from_config(model_dir)
-    net.eval()
-    
+def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, test_seq_len=75, dims=3):
+    """
+    Visualises the hidden activations of trained models corresponding to model_dirs in a 2D or 3D PCA space,
+    alongside the ground truth and predicted behaviour
+    """
     # loading dataset and generating train and test data
     dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=train_seq_len)
     train_inputs, _ = tensor_dataset_sample(dataset)
@@ -409,58 +409,75 @@ def PCA_analysis_hidden_activations(model_dir, train_seq_len=1000, test_seq_len=
     
     test_labels = test_labels.cpu().detach().numpy().squeeze() # for plotting later
 
-    # getting hidden activations over a test trial
-    train_activations, _ = get_hidden_activations(net, train_inputs) # returns a 2D numpy array
-    test_activations, pred_labels = get_hidden_activations(net, test_inputs) 
+    # getting hidden activations over a test trial for each model
+    pred_labels = []
+    compressed_activations = []
+    names = []
+    pca_objs = []
+    for model_dir in model_dirs:
+        # loading model
+        net, name = initialize_model_from_config(model_dir)
+        net.eval()
+        train_activations, _ = get_hidden_activations(net, train_inputs) # returns a 2D numpy array
+        test_activations, pred_label = get_hidden_activations(net, test_inputs) 
         
-    # performing PCA
-    pca = PCA(n_components=dims)
-    pca.fit(train_activations)
-    compressed_hidden = pca.transform(test_activations)
-    
-    print("explained variance of PCs:", pca.explained_variance_ratio_[:dims])
+        # performing PCA
+        pca = PCA(n_components=dims)
+        pca.fit(train_activations)
+        compressed_hidden = pca.transform(test_activations)
 
-    compressed_hidden_inactive = compressed_hidden[np.where(pred_labels == 0)[0], :]
-    compressed_hidden_accept = compressed_hidden[np.where(pred_labels == 1)[0], :]
-    compressed_hidden_reject = compressed_hidden[np.where(pred_labels == 2)[0], :]
+        # saving for later
+        pca_objs.append(pca)
+        compressed_activations.append(compressed_hidden)
+        names.append(name)
+        pred_labels.append(pred_label)
     
-    # plotting
-    fig, axs = plt.subplots(1, 2, figsize=(20, 10))
+    fig, axs = plt.subplots(1, len(model_dirs)+1, figsize=(4*(len(model_dirs)+1), 4))
+
+    # plotting trajectories in PCA space
+    for i, compressed_hidden in enumerate(compressed_activations):
+        compressed_hidden_inactive = compressed_hidden[np.where(pred_labels[i] == 0)[0], :]
+        compressed_hidden_accept = compressed_hidden[np.where(pred_labels[i] == 1)[0], :]
+        compressed_hidden_reject = compressed_hidden[np.where(pred_labels[i] == 2)[0], :]
+
+        if dims == 3:
+            axs[i].set_projection('3d')
+            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], compressed_hidden_inactive[:, 2], label='inactive', marker='o')
+            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], compressed_hidden_accept[:, 2], label='accept', marker='o')
+            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], compressed_hidden_reject[:, 2], label='reject', marker='o')
+            axs[i].plot(compressed_hidden[:, 0], compressed_hidden[:, 1], compressed_hidden[:, 2], label='trajectory', color='grey', alpha=0.5)
+            axs[i].set_xlabel('PC 1', fontsize=16)
+            axs[i].set_ylabel('PC 2', fontsize=16)
+            axs[i].set_zlabel('PC 3', fontsize=16)
         
-    if dims == 3:
-        ax = axs[0]
-        ax.set_projection('3d')
-        ax.scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], compressed_hidden_inactive[:, 2], label='inactive', marker='o')
-        ax.scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], compressed_hidden_accept[:, 2], label='accept', marker='o')
-        ax.scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], compressed_hidden_reject[:, 2], label='reject', marker='o')
-        ax.plot(compressed_hidden[:, 0], compressed_hidden[:, 1], compressed_hidden[:, 2], label='trajectory', color='grey', alpha=0.5)
-        ax.set_xlabel('PC 1', fontsize=16)
-        ax.set_ylabel('PC 2', fontsize=16)
-        ax.set_zlabel('PC 3', fontsize=16)
+        elif dims == 2:
+            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], label='inactive', marker='o')
+            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], label='accept', marker='o')
+            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], label='reject', marker='o')
+            axs[i].plot(compressed_hidden[:, 0], compressed_hidden[:, 1], label='trajectory', color='grey', alpha=0.5)
+            axs[i].set_xlabel('PC 1', fontsize=16)
+            axs[i].set_ylabel('PC 2', fontsize=16)
+        
+        axs[i].set_title(f'{names[i]}: PCs ~ {int(round(100*np.sum(pca.explained_variance_ratio_)))}% var.', fontsize=16)
+
     
-    elif dims == 2:
-        ax = axs[0]
-        ax.scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], label='inactive', marker='o')
-        ax.scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], label='accept', marker='o')
-        ax.scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], label='reject', marker='o')
-        ax.plot(compressed_hidden[:, 0], compressed_hidden[:, 1], label='trajectory', color='grey', alpha=0.5)
-        ax.set_xlabel('PC 1', fontsize=16)
-        ax.set_ylabel('PC 2', fontsize=16)
-    
-    ax.legend(fontsize=16)
+    axs[0].legend(fontsize=16)
 
     # plotting predicted labels vs. ground truth
-    ax2 = axs[1]
-    ax2.plot(test_labels, label='GT', color='red')
-    ax2.plot(pred_labels, label='pred', color='blue')
-    ax2.set_xlabel('Time steps', fontsize=16)
-    ax2.set_yticks([0, 1, 2])
-    ax2.set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=12)
-    ax2.legend(fontsize=16)
+    axs[-1].plot(test_labels, label='GT', color='red')
+    # plotting predicted labels for each model
+    colors = ['blue', 'green', 'orange', 'purple', 'brown', 'pink'] # unlikely to need more than 6 models
+    for i, pred_label in enumerate(pred_labels):
+        axs[-1].plot(pred_label, label=names[i], color=colors[i])
     
-    ax.set_title(f'PCA compressed hidden activations accounting for {int(round(100*np.sum(pca.explained_variance_ratio_)))}% var.', fontsize=16)
-    ax2.set_title('Predicted labels vs. ground truth', fontsize=16)
+    axs[-1].set_xlabel('Time steps', fontsize=16)
+    axs[-1].set_yticks([0, 1, 2])
+    axs[-1].set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=12)
+    axs[-1].legend(fontsize=16)
     
+    axs[-1].set_title('Predicted labels vs. ground truth', fontsize=16)
+    
+    plt.tight_layout()
     plt.show(block=True)
 
 
@@ -489,4 +506,4 @@ if __name__ == "__main__":
     # combined_max_activation_stem_plot(test_models, seq_len=125)
     # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125)
     # find_fixed_points(r"runs\light_GRU_run2", seq_len=75)
-    PCA_analysis_hidden_activations(r"runs\ei_light_GRU_with_l2reg", train_seq_len=1000, test_seq_len=50, dims=2)
+    PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=50, dims=2)
