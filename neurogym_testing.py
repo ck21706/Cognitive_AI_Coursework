@@ -1,4 +1,4 @@
-from adapted_GRUs import GRU_Net
+from adapted_GRUs import GRU_Net, FixedPoint_GRU_Net_Wrapper
 from neurogym_training import tensor_dataset_sample
 import numpy as np
 import neurogym as ngym
@@ -7,6 +7,14 @@ import matplotlib.pyplot as plt
 import json
 from typing import List
 import os
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+# fixed point finder local import
+import sys
+sys.path.append(os.path.join(os.getcwd(), 'fixed-point-finder'))
+from FixedPointFinderTorch import FixedPointFinderTorch as FixedPointFinder
+from plot_utils import plot_fps
 
 
 # Device
@@ -341,10 +349,119 @@ def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len):
     plt.show(block=True)
 
 
-def find_fixed_points(net, inputs, labels):
-    fpf 
+def find_fixed_points(model_dir, seq_len=100):
+    # loading model
+    net, name = initialize_model_from_config(model_dir)
+    net = FixedPoint_GRU_Net_Wrapper(net)
+    net.eval()
+    
+
+    # loading dataset
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    inputs, labels = tensor_dataset_sample(dataset)
+
+    # getting hidden activations over a test trial
+    _, hidden_activations = net(inputs, hidden=None)
+    hidden_activations = hidden_activations.cpu().detach().numpy().squeeze() # squeezing to get shape (seq_len, hidden_size) as a np array
+    
+    # initialising fixed point finder
+    net.to("cpu") # moving to cpu for fixed point finder
+    fpf = FixedPointFinder(net)
+
+    # finding fixed points for some random initial hidden states and zeroed input
+    initial_conditions = np.random.randn(10, net.gru_net.hidden_size)
+    fixed_inputs = np.zeros((10, net.gru_net.input_size))
+    fps = fpf.find_fixed_points(initial_conditions, fixed_inputs)[0]
+    fixed_points = fps.xstar # fixed point locations in hidden state space
+    print("fixed points shape:", fixed_points.shape)
+    print("hidden activations shape:", hidden_activations.shape)
 
 
+    # projecting fixed points and hidden activations into 3D space using PCA
+    pca = PCA(n_components=3)
+    pca.fit(np.concatenate([hidden_activations, fixed_points], axis=0))
+    hidden_activations_3d = pca.transform(hidden_activations)
+    fixed_points_3d = pca.transform(fixed_points)
+
+    # plotting
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(hidden_activations_3d[:, 0], hidden_activations_3d[:, 1], hidden_activations_3d[:, 2], label='Hidden activations')
+    ax.scatter(fixed_points_3d[:, 0], fixed_points_3d[:, 1], fixed_points_3d[:, 2], label='Fixed points', marker='x')
+    ax.set_xlabel('PC 1')
+    ax.set_ylabel('PC 2')
+    ax.set_zlabel('PC 3')
+    ax.legend()
+
+    plt.show()
+
+
+def PCA_analysis_hidden_activations(model_dir, train_seq_len=1000, test_seq_len=75, dims=3):
+    # loading model
+    net, name = initialize_model_from_config(model_dir)
+    net.eval()
+    
+    # loading dataset and generating train and test data
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=train_seq_len)
+    train_inputs, _ = tensor_dataset_sample(dataset)
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=test_seq_len)
+    test_inputs, test_labels = tensor_dataset_sample(dataset)
+    
+    test_labels = test_labels.cpu().detach().numpy().squeeze() # for plotting later
+
+    # getting hidden activations over a test trial
+    train_activations, _ = get_hidden_activations(net, train_inputs) # returns a 2D numpy array
+    test_activations, pred_labels = get_hidden_activations(net, test_inputs) 
+        
+    # performing PCA
+    pca = PCA(n_components=dims)
+    pca.fit(train_activations)
+    compressed_hidden = pca.transform(test_activations)
+    
+    print("explained variance of PCs:", pca.explained_variance_ratio_[:dims])
+
+    compressed_hidden_inactive = compressed_hidden[np.where(pred_labels == 0)[0], :]
+    compressed_hidden_accept = compressed_hidden[np.where(pred_labels == 1)[0], :]
+    compressed_hidden_reject = compressed_hidden[np.where(pred_labels == 2)[0], :]
+    
+    # plotting
+    fig, axs = plt.subplots(1, 2, figsize=(20, 10))
+        
+    if dims == 3:
+        ax = axs[0]
+        ax.set_projection('3d')
+        ax.scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], compressed_hidden_inactive[:, 2], label='inactive', marker='o')
+        ax.scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], compressed_hidden_accept[:, 2], label='accept', marker='o')
+        ax.scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], compressed_hidden_reject[:, 2], label='reject', marker='o')
+        ax.plot(compressed_hidden[:, 0], compressed_hidden[:, 1], compressed_hidden[:, 2], label='trajectory', color='grey', alpha=0.5)
+        ax.set_xlabel('PC 1', fontsize=16)
+        ax.set_ylabel('PC 2', fontsize=16)
+        ax.set_zlabel('PC 3', fontsize=16)
+    
+    elif dims == 2:
+        ax = axs[0]
+        ax.scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], label='inactive', marker='o')
+        ax.scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], label='accept', marker='o')
+        ax.scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], label='reject', marker='o')
+        ax.plot(compressed_hidden[:, 0], compressed_hidden[:, 1], label='trajectory', color='grey', alpha=0.5)
+        ax.set_xlabel('PC 1', fontsize=16)
+        ax.set_ylabel('PC 2', fontsize=16)
+    
+    ax.legend(fontsize=16)
+
+    # plotting predicted labels vs. ground truth
+    ax2 = axs[1]
+    ax2.plot(test_labels, label='GT', color='red')
+    ax2.plot(pred_labels, label='pred', color='blue')
+    ax2.set_xlabel('Time steps', fontsize=16)
+    ax2.set_yticks([0, 1, 2])
+    ax2.set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=12)
+    ax2.legend(fontsize=16)
+    
+    ax.set_title(f'PCA compressed hidden activations accounting for {int(round(100*np.sum(pca.explained_variance_ratio_)))}% var.', fontsize=16)
+    ax2.set_title('Predicted labels vs. ground truth', fontsize=16)
+    
+    plt.show(block=True)
 
 
 if __name__ == "__main__":
@@ -370,4 +487,6 @@ if __name__ == "__main__":
     # visualise_hidden_activations(r"runs\ei_light_GRU_with_l2reg", seq_len=300, fs=16)
 
     # combined_max_activation_stem_plot(test_models, seq_len=125)
-    combined_timeseries_of_most_sensitive_units(test_models, seq_len=125)
+    # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125)
+    # find_fixed_points(r"runs\light_GRU_run2", seq_len=75)
+    PCA_analysis_hidden_activations(r"runs\ei_light_GRU_with_l2reg", train_seq_len=1000, test_seq_len=50, dims=2)

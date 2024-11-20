@@ -145,8 +145,8 @@ def plot_fps(fps,
             pca,
             scale=mode_scale)
 
-    plt.ion()
-    plt.show()
+    # plt.ion()
+    plt.show(block=True)
     plt.pause(1e-10)
     
     return fig

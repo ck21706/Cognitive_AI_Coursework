@@ -219,6 +219,32 @@ class GRU_Net(nn.Module):
             pred_labels = torch.argmax(pred_probs, dim=2)
             
         return pred_labels
+    
+
+class FixedPoint_GRU_Net_Wrapper(torch.nn.Module):
+    def __init__(self, gru_net, batch_first=False):
+        super().__init__()
+        self.gru_net = gru_net
+        self.batch_first = batch_first  # Ensure this matches your RNN's setting
+
+    def forward(self, input, hidden):
+        # Squeeze the extra dimension from hidden state
+        # Hidden shape transforms from [1, batch_size, hidden_size] to [batch_size, hidden_size]
+        if hidden is not None:
+            hidden = hidden.squeeze()
+
+        # EI-RNN expects inputs of shape [seq_len, batch_size, input_size]
+        # Since we have seq_len=1, input shape is already correct
+
+        # Forward pass through your EI-RNN
+        output, hidden = self.gru_net(input, hidden, return_hidden=True)
+
+        # Unsqueeze hidden to match FixedPointFinder's expectation
+        # Hidden shape transforms from [batch_size, hidden_size] to [1, batch_size, hidden_size]
+        # hidden = hidden.unsqueeze(0)
+
+        # Return None for output as per FixedPointFinder's requirement
+        return None, hidden
 
 
 
