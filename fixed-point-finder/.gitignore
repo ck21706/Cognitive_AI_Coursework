@@ -1,0 +1,11 @@
+checkpoint
+example/logs/*
+*ckpt*.index
+*ckpt*data*
+*ckpt*meta
+events.out.tfevents*
+*.pkl
+*.pyc
+*.DS_Store
+*.sublime-workspace
+*.sublime-project

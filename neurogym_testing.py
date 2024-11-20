@@ -8,6 +8,7 @@ import json
 from typing import List
 import os
 
+
 # Device
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -138,6 +139,35 @@ def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, **kwar
     plt.show()
 
 
+def get_hidden_activations(net, inputs):
+    """
+    Gets the hidden activation and formatted class predictions for a given input timeseries, assuming it contains only a single batch
+    """
+    _, hidden_activations = net(inputs, return_hidden=True)
+    hidden_activations = hidden_activations.cpu().detach().numpy()
+    pred_label = net.predict(inputs).cpu().detach().numpy()
+    pred_label = pred_label.squeeze()
+    hidden_activations = hidden_activations.squeeze() # squeezing to get shape (seq_len, hidden_size)
+    
+    return hidden_activations, pred_label
+
+def get_binary_condition_selectivity(cond1_mat, cond2_mat):
+    """
+    general function for calculating selectivity of units, given two matrices corresponding to hidden activations at timesteps that
+    satisfy condition 1 and hidden activations at timesteps that satisfy condition 2. 
+    Both matrices should be 2D with second dimension corresponding to units 
+    """
+    mean_cond1 = np.mean(cond1_mat, axis=0)
+    mean_cond2 = np.mean(cond2_mat, axis=0)
+    std_cond1 = np.std(cond1_mat, axis=0)
+    std_cond2 = np.std(cond2_mat, axis=0)
+
+    # calculating selectivity: positive values indicate a neuron is selective for cond 1, negative values indicate selectivity for cond 2
+    selectivity = (mean_cond1 - mean_cond2) / np.sqrt((std_cond1**2 + std_cond2**2)/2 + 1e-8) # to avoid division by zero
+
+    return selectivity
+
+
 def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     # loading model
     net, name = initialize_model_from_config(model_dir, **kwargs)
@@ -148,11 +178,8 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     inputs, labels = tensor_dataset_sample(dataset)
 
     # getting hidden activations and corresponding predictions ready for plotting
-    _, hidden_activations = net(inputs, return_hidden=True)
-    hidden_activations = hidden_activations.cpu().detach().numpy()
-    pred_label = net.predict(inputs).cpu().detach().numpy()
-    pred_label = pred_label.squeeze()
-    hidden_activations = hidden_activations.squeeze() # squeezing to get shape (seq_len, hidden_size)
+    hidden_activations, pred_label = get_hidden_activations(net, inputs)
+    
     print("prediction and hidden activation shape:", pred_label.shape, hidden_activations.shape)
 
     # plotting histogram of hidden activation magnitudes for the entire trial
@@ -182,13 +209,7 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     hidden_active = hidden_activations[np.where(pred_label != 0)[0], :]
     hidden_passive = hidden_activations[np.where(pred_label == 0)[0], :]
     
-    mean_active = np.mean(hidden_active, axis=0)
-    mean_passive = np.mean(hidden_passive, axis=0)
-    std_active = np.std(hidden_active, axis=0)
-    std_passive = np.std(hidden_passive, axis=0)
-
-    # calculating selectivity: positive values indicate a neuron is selective for active actions, negative values indicate selectivity for passive actions
-    active_inactive_selectivity = (mean_active - mean_passive) / np.sqrt((std_active**2 + std_passive**2)/2)
+    active_inactive_selectivity = get_binary_condition_selectivity(hidden_active, hidden_passive)
     
     # plotting
     fig, axs = plt.subplots(2, 1, figsize=(10, 5))
@@ -200,13 +221,7 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     hidden_accept = hidden_activations[np.where(pred_label == 2)[0], :]
     hidden_reject = hidden_activations[np.where(pred_label == 1)[0], :]
 
-    mean_accept = np.mean(hidden_accept, axis=0)
-    mean_reject = np.mean(hidden_reject, axis=0)
-    std_accept = np.std(hidden_accept, axis=0)
-    std_reject = np.std(hidden_reject, axis=0)
-
-    # calculating selectivity: positive values indicate a neuron is selective for accepting actions, negative values indicate selectivity for rejecting actions
-    accept_reject_selectivity = (mean_accept - mean_reject) / np.sqrt((std_accept**2 + std_reject**2)/2)
+    accept_reject_selectivity = get_binary_condition_selectivity(hidden_accept, hidden_reject)
 
     # plotting
     colors = ['red' if s > 0 else 'grey' for s in active_inactive_selectivity]
@@ -240,8 +255,101 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     plt.show(block=True)
 
 
+def combined_max_activation_stem_plot(model_dirs: List[str], seq_len):
+    """
+    Plots the maximum activation of each hidden layer unit throughout the trial for each model in model_dirs as a stem plot
+    """
+    # generating test data
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    inputs, labels = tensor_dataset_sample(dataset)
+
+    model_activations = []
+    model_names = []
+    model_preds = []
+    for model_dir in model_dirs:
+        # loading model
+        net, name = initialize_model_from_config(model_dir)
+        net.eval()
+        # getting hidden activations and corresponding predictions ready for plotting
+        hidden_activations, pred_label = get_hidden_activations(net, inputs)
+        # saving for later
+        model_activations.append(hidden_activations)
+        model_names.append(name)
+        model_preds.append(pred_label)
+
+    # calculating the max activation for each unit in each model (assuming that models have identical numbers of units)
+    max_activations = [np.max(hidden_activations, axis=0) for hidden_activations in model_activations]
+
+    # plotting
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    units = np.arange(len(max_activations[0]))
+    color = ['r', 'b', 'g']
+    for i, max_activation in enumerate(max_activations):
+        ax.stem(units, max_activation, label=model_names[i], use_line_collection=True, linefmt=color[i], markerfmt=color[i]+'o', basefmt='none')
+    ax.set_title('Maximum activation of each unit throughout the trial', fontsize=16)
+    ax.set_xlabel('Unit', fontsize=16)
+    ax.set_ylabel('max activation', fontsize=16)
+    ax.legend(fontsize=16)
+    plt.show()
+
+def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len):
+    # generating test data
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    inputs, labels = tensor_dataset_sample(dataset)
+
+    model_activations = []
+    model_names = []
+    model_preds = []
+    for model_dir in model_dirs:
+        # loading model
+        net, name = initialize_model_from_config(model_dir)
+        net.eval()
+        # getting hidden activations and corresponding predictions ready for plotting
+        hidden_activations, pred_label = get_hidden_activations(net, inputs)
+        # saving for later
+        model_activations.append(hidden_activations)
+        model_names.append(name)
+        model_preds.append(pred_label)
+
+    # calculating the sensitivity of each unit in each model (assuming that models have identical numbers of units)
+    top_selective_units = []
+    for pred_label, hidden_activations in zip(model_preds, model_activations):
+        hidden_active = hidden_activations[np.where(pred_label != 0)[0], :]
+        hidden_passive = hidden_activations[np.where(pred_label == 0)[0], :]
+        
+        active_inactive_selectivity = get_binary_condition_selectivity(hidden_active, hidden_passive)
+        most_selective_unit = np.argmax(np.abs(active_inactive_selectivity))
+        top_selective_units.append(most_selective_unit)
+    
+    # plotting
+    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+    
+    # visualising activation timeseries of most selective unit in each model
+    for i, activations in enumerate(model_activations):
+        axs[0].plot(activations[:, top_selective_units[i]], label=model_names[i])
+    
+    axs[0].set_title(f'Timeseries activity of most selective unit in each model', fontsize=16)
+    axs[0].set_ylabel('Activation magnitude', fontsize=16)
+    axs[0].set_xlim([0, len(activations)])
+    axs[0].legend(fontsize=16)
+
+    # visualising corresponding task input data
+    visualise_task_data(inputs, ax=axs[1], fs=16)
+    axs[1].set_title('', fontsize=16)
+    axs[1].set_ylabel('', fontsize=16)
+
+    plt.show(block=True)
+
+
+def find_fixed_points(net, inputs, labels):
+    fpf 
+
+
+
 
 if __name__ == "__main__":
+    test_models = [r"runs\light_GRU_run2", r"runs\enu_light_GRU_run2", r"runs\ei_light_GRU_with_l2reg"]
+    
     # visualise_inputs(inputs)
     # print("actions", output_size)
     # print("observations", input_size)
@@ -257,7 +365,9 @@ if __name__ == "__main__":
     #                        ['light GRU', 'ENU light GRU', 'EI light GRU with l2 reg', 'EI light GRU'],
     #                        plot_to_epoch = 500, log_scale=False)
     # visualise_task_performance([r"runs\light_GRU_run2", r"runs\enu_light_GRU_run2", r"runs\ei_light_GRU_run2"], seq_len=125)
-    visualise_hidden_activations(r"runs\light_GRU_run2", seq_len=300, fs=16)
+    # visualise_hidden_activations(r"runs\light_GRU_run2", seq_len=300, fs=16)
     # visualise_hidden_activations(r"runs\ei_light_GRU_run2", seq_len=300, fs=16)
     # visualise_hidden_activations(r"runs\ei_light_GRU_with_l2reg", seq_len=300, fs=16)
-    
+
+    # combined_max_activation_stem_plot(test_models, seq_len=125)
+    combined_timeseries_of_most_sensitive_units(test_models, seq_len=125)
