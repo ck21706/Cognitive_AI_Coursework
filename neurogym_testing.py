@@ -105,6 +105,10 @@ def initialize_model_from_config(model_dir, **kwargs):
 
 def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, task="DualDelayMatchSample-v0", **kwargs):
     """
+    REDUNDANT:
+    I used this function to develop many of the different visualisations together, but I haven't tested it
+    since and its probably non functional now.
+
     Visualise the performance of one or more trained models on the DualDelayMatchSample task
     """
     # loading config and dataset
