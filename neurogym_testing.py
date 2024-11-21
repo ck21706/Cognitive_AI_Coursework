@@ -9,6 +9,7 @@ from typing import List
 import os
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+import matplotlib.patches as mpatches
 
 # fixed point finder local import
 import sys
@@ -20,7 +21,7 @@ from plot_utils import plot_fps
 # Device
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def visualise_task_data(inputs: torch.Tensor, batch_num=0, ax=None, fs=16):
+def visualise_task_data(inputs: torch.Tensor, batch_num=0, ax=None, fs=16, task="DualDelayMatchSample-v0"):
     """
     Visualise the input data for a given batch
     """
@@ -34,19 +35,23 @@ def visualise_task_data(inputs: torch.Tensor, batch_num=0, ax=None, fs=16):
     ax.set_xlabel('Time steps', fontsize=fs)
     ax.set_ylabel('Input features', fontsize=fs)
     ax.set_yticks([0, 1, 2, 3, 4, 5, 6])
-    ax.set_yticklabels(['Fixation', 'cue1', 'cue2', 'cue3', 'cue4', 'compare1', 'compare2'], fontsize=fs)
     
+    if task == "DualDelayMatchSample-v0":
+        ax.set_yticklabels(['Fixation', 'cue1', 'cue2', 'cue3', 'cue4', 'compare1', 'compare2'], fontsize=fs)
+    elif task == "ContextDecisionMaking-v0":
+        ax.set_yticklabels(['fixation', 'cont1_stim1', 'cont1_stim2', 'cont2_stim1', 'cont2_stim2', 'context1', 'context2'], fontsize=fs)
+
     return ax
 
-def visualise_training_log(filepaths: List[str], run_names: List[str], plot_to_epoch=None, log_scale=False, fs=16):
+def visualise_training_log(model_dirs: List[str], run_names: List[str], plot_to_epoch=None, log_scale=False, fs=16):
     """
-    visualise the training log data for the json files corresponding to entries in filepaths.
+    visualise the training log data for the training_log.json files inside training run directories specified in model_dirs.
     Data will be labelled according to run_names
     """
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
     
-    for filepath, name in zip(filepaths, run_names):
-        with open(filepath, 'r') as f:
+    for model_dir, name in zip(model_dirs, run_names):
+        with open(os.path.join(model_dir, "training_log.json"), 'r') as f:
             training_log = json.load(f)
         
         ax[0].plot(training_log['train_loss'][:plot_to_epoch], label=name, linewidth=2)
@@ -98,7 +103,7 @@ def initialize_model_from_config(model_dir, **kwargs):
     return net, config['model_type']
 
 
-def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, **kwargs):
+def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, task="DualDelayMatchSample-v0", **kwargs):
     """
     Visualise the performance of one or more trained models on the DualDelayMatchSample task
     """
@@ -112,7 +117,7 @@ def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, **kwar
         names.append(name)
 
     # generating test data
-    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
     inputs, labels = tensor_dataset_sample(dataset)
 
     # getting predictions
@@ -127,22 +132,27 @@ def visualise_task_performance(model_dirs: List[str], seq_len=100, fs=16, **kwar
     labels = labels.cpu().detach().numpy()
     fig, axs = plt.subplots(2, 1, figsize=(10, 15))
     # visualising inputs in first axis
-    visualise_task_data(inputs, ax=axs[0], fs=fs)
+    visualise_task_data(inputs, ax=axs[0], fs=fs, task=task)
     # plotting response in second axis
     t = np.arange(len(pred_labels))
+    
     # plotting the response of each of the models
     for pred, name in zip(model_preds, names):
         axs[1].plot(t, pred, label=f"{name} pred", marker='x')
     # plotting ground truth
     axs[1].plot(t, labels, label='GT response', marker='.')
+    
     # formatting
     axs[1].legend(fontsize=fs)
     axs[1].set_xlabel('Time steps', fontsize=fs)
     axs[1].set_yticks([0, 1, 2])
-    axs[1].set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=fs)
     axs[1].set_xlim([0, len(pred_labels)])
-
     axs[0].set_title(f'model performance on task', fontsize=fs)
+
+    if task == "DualDelayMatchSample-v0":
+        axs[1].set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=fs)
+    elif task == "ContextDecisionMaking-v0":
+        axs[1].set_yticklabels(['No action', 'choice1', 'choice2'], fontsize=fs)
 
     plt.show()
 
@@ -238,7 +248,6 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     axs[1].set_xlabel('Unit', fontsize=fs)
     axs[1].set_ylabel('Selectivity', fontsize=fs)
     # Add legend to explain colors
-    import matplotlib.patches as mpatches
     red_patch = mpatches.Patch(color='red', label='Action selective')
     grey_patch = mpatches.Patch(color='grey', label='Inaction selective')
     axs[1].legend(handles=[red_patch, grey_patch], fontsize=fs)
@@ -262,8 +271,59 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
 
     plt.show(block=False)
 
+
+def visualise_selectivity(model_dir, seq_len=75, fs=16, task="DualDelayMatchSample-v0", **kwargs):
+    # loading model
+    net, name = initialize_model_from_config(model_dir, **kwargs)
+    net.eval()
     
-def monte_carlo_selectivity_histogram(model_dir, simulations=32, seq_len=1000, fs=16, **kwargs):
+    # generating test data
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    inputs, _ = tensor_dataset_sample(dataset)
+
+    # getting hidden activations and corresponding predictions ready for plotting
+    _, hidden_activations = net(inputs, return_hidden=True)
+    hidden_activations = hidden_activations.cpu().detach().numpy().squeeze() # shape (seq_len, batch_size, hidden_size)
+    pred_label = net.predict(inputs).cpu().detach().numpy().squeeze() # shape (seq_len, batch_size)
+
+    # there are three actions, two of which are active (accept/reject), the third is passive (do nothing). 
+    # so we can group the actions into active and passive
+    hidden_active = hidden_activations[np.where(pred_label != 0)[0], :]
+    hidden_passive = hidden_activations[np.where(pred_label == 0)[0], :]
+    
+    active_inactive_selectivity = get_binary_condition_selectivity(hidden_active, hidden_passive)
+    
+    # plotting
+    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+    axs[0].bar(np.arange(len(active_inactive_selectivity)), active_inactive_selectivity)
+    axs[0].set_ylabel('Selectivity', fontsize=fs)
+    axs[0].set_title('Action(positive)/Inaction(negative) selectivity of each unit', fontsize=fs)
+
+    # we can repeat this, but this time looking at the reject and accept action selectivity
+    hidden_accept = hidden_activations[np.where(pred_label == 2)[0], :]
+    hidden_reject = hidden_activations[np.where(pred_label == 1)[0], :]
+
+    accept_reject_selectivity = get_binary_condition_selectivity(hidden_accept, hidden_reject)
+
+    # plotting
+    colors = ['red' if s > 0 else 'grey' for s in active_inactive_selectivity]
+    axs[1].bar(np.arange(len(accept_reject_selectivity)), accept_reject_selectivity, color=colors)
+    axs[1].set_xlabel('Unit', fontsize=fs)
+    axs[1].set_ylabel('Selectivity', fontsize=fs)
+    # Add legend to explain colors
+    red_patch = mpatches.Patch(color='red', label='Action selective')
+    grey_patch = mpatches.Patch(color='grey', label='Inaction selective')
+    axs[1].legend(handles=[red_patch, grey_patch], fontsize=fs)
+
+    if task == "DualDelayMatchSample-v0":
+        axs[1].set_title('Accept/Reject selectivity of each unit', fontsize=fs)
+    elif task == "ContextDecisionMaking-v0":
+        axs[1].set_title('choice1/choice2 selectivity of each unit', fontsize=fs)
+    
+    plt.tight_layout()
+    plt.show()
+    
+def monte_carlo_selectivity_histogram(model_dir, simulations=32, seq_len=1000, fs=16, task="DualDelayMatchSample-v0", **kwargs):
     """
     runs a monte carlo simulation to estimate the distribution of maximum absolute selectivity values for significant units
     in the hidden layer. 
@@ -273,16 +333,13 @@ def monte_carlo_selectivity_histogram(model_dir, simulations=32, seq_len=1000, f
     net.eval()
     
     # generating test data
-    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=simulations, seq_len=seq_len)
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=simulations, seq_len=seq_len)
     inputs, labels = tensor_dataset_sample(dataset)
 
     # getting hidden activations and corresponding predictions ready for plotting
     _, hidden_activations = net(inputs, return_hidden=True)
     hidden_activations = hidden_activations.cpu().detach().numpy().squeeze() # shape (seq_len, batch_size, hidden_size)
-    print("hidden activation shape:", hidden_activations.shape)
-    # getting network predictions
     pred_labels = net.predict(inputs).cpu().detach().numpy().squeeze() # shape (seq_len, batch_size)
-    print("pred label shape:", pred_labels.shape)
 
     # getting the maximum activation for each unit throughout the trial
     max_activations = np.max(hidden_activations, axis=0) # shape (batch_size, hidden_size)
@@ -361,9 +418,9 @@ def combined_max_activation_stem_plot(model_dirs: List[str], seq_len):
     ax.legend(fontsize=16)
     plt.show()
 
-def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len):
+def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len, task="DualDelayMatchSample-v0"):
     # generating test data
-    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
     inputs, labels = tensor_dataset_sample(dataset)
 
     model_activations = []
@@ -398,20 +455,64 @@ def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len):
     for i, activations in enumerate(model_activations):
         axs[0].plot(activations[:, top_selective_units[i]], label=model_names[i])
     
-    axs[0].set_title(f'Timeseries activity of most selective unit in each model', fontsize=16)
-    axs[0].set_ylabel('Activation magnitude', fontsize=16)
+    axs[0].set_title(f'Timeseries activity of most action selective unit in each model', fontsize=16)
+    axs[0].set_ylabel('Activation', fontsize=16)
     axs[0].set_xlim([0, len(activations)])
     axs[0].legend(fontsize=16)
 
     # visualising corresponding task input data
-    visualise_task_data(inputs, ax=axs[1], fs=16)
+    visualise_task_data(inputs, ax=axs[1], fs=16, task=task)
     axs[1].set_title('', fontsize=16)
     axs[1].set_ylabel('', fontsize=16)
 
     plt.show(block=True)
 
 
+def timeseries_of_select_units(model_dir: str, unit_inds:list[int], unit_labels: List[str], seq_len=75, fs=16, task="DualDelayMatchSample-v0", **kwargs):
+    # generating test data
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
+    inputs, labels = tensor_dataset_sample(dataset)
+
+    # loading model
+    net, name = initialize_model_from_config(model_dir)
+    net.eval()
+    # getting hidden activations and corresponding predictions ready for plotting
+    hidden_activations, pred_label = get_hidden_activations(net, inputs)
+    
+    # finding points where the model makes predictions
+    c1_preds = np.where(pred_label == 1)[0]
+    c2_preds = np.where(pred_label == 2)[0]
+    
+    # plotting
+    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+    for i, unit_ind in enumerate(unit_inds):
+        axs[0].plot(hidden_activations[:, unit_ind], label=unit_labels[i])
+    
+    # plotting dashed vertical lines at c1_preds and c2_preds
+    label = "c1_pred"
+    for c1 in c1_preds:
+        axs[0].axvline(x=c1, color='red', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
+        label = None
+    label = "c2_pred"
+    for c2 in c2_preds:
+        axs[0].axvline(x=c2, color='blue', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
+        label = None
+
+    axs[0].set_title(f'Timeseries activity of selected units in {name}-GRU model', fontsize=fs)
+    axs[0].set_ylabel('Activation', fontsize=fs)
+    axs[0].set_xlim([0, len(hidden_activations)])
+    axs[0].legend(fontsize=12)
+
+    visualise_task_data(inputs, ax=axs[1], fs=fs, task=task)
+    axs[1].set_title('', fontsize=fs)
+    
+    plt.show()
+
+
 def find_fixed_points(model_dir, seq_len=100):
+    """
+    Struggled to get results that made sense with this method and ran out of space anyway so never made it into the report
+    """
     # loading model
     net, name = initialize_model_from_config(model_dir)
     net = FixedPoint_GRU_Net_Wrapper(net)
@@ -458,15 +559,15 @@ def find_fixed_points(model_dir, seq_len=100):
     plt.show()
 
 
-def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, test_seq_len=75, dims=3):
+def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, test_seq_len=75, dims=3, task="DualDelayMatchSample-v0"):
     """
     Visualises the hidden activations of trained models corresponding to model_dirs in a 2D or 3D PCA space,
     alongside the ground truth and predicted behaviour.
     """
     # loading dataset and generating train and test data
-    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=train_seq_len)
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=train_seq_len)
     train_inputs, _ = tensor_dataset_sample(dataset)
-    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=test_seq_len)
+    dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=test_seq_len)
     test_inputs, test_labels = tensor_dataset_sample(dataset)
     
     test_labels = test_labels.cpu().detach().numpy().squeeze() # for plotting later
@@ -496,6 +597,12 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
     
     fig, axs = plt.subplots(1, len(model_dirs)+1, figsize=(4*(len(model_dirs)+1), 4))
 
+    if task == "DualDelayMatchSample-v0":
+        action_labels = ['No action', 'Accept', 'Reject']
+    elif task == "ContextDecisionMaking-v0":
+        action_labels = ['No action', 'choice1', 'choice2']
+    
+    
     # plotting trajectories in PCA space
     for i, compressed_hidden in enumerate(compressed_activations):
         compressed_hidden_inactive = compressed_hidden[np.where(pred_labels[i] == 0)[0], :]
@@ -503,19 +610,20 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
         compressed_hidden_reject = compressed_hidden[np.where(pred_labels[i] == 2)[0], :]
 
         if dims == 3:
-            axs[i].set_projection('3d')
-            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], compressed_hidden_inactive[:, 2], label='inactive', marker='o')
-            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], compressed_hidden_accept[:, 2], label='accept', marker='o')
-            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], compressed_hidden_reject[:, 2], label='reject', marker='o')
+            axs[i].axis('off')
+            axs[i] = fig.add_subplot(1, len(model_dirs)+1, i+1, projection='3d')
+            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], compressed_hidden_inactive[:, 2], label=action_labels[0], marker='o')
+            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], compressed_hidden_accept[:, 2], label=action_labels[1], marker='o')
+            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], compressed_hidden_reject[:, 2], label=action_labels[2], marker='o')
             axs[i].plot(compressed_hidden[:, 0], compressed_hidden[:, 1], compressed_hidden[:, 2], label='trajectory', color='grey', alpha=0.5)
             axs[i].set_xlabel('PC 1', fontsize=16)
             axs[i].set_ylabel('PC 2', fontsize=16)
             axs[i].set_zlabel('PC 3', fontsize=16)
         
         elif dims == 2:
-            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], label='inactive', marker='o')
-            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], label='accept', marker='o')
-            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], label='reject', marker='o')
+            axs[i].scatter(compressed_hidden_inactive[:, 0], compressed_hidden_inactive[:, 1], label=action_labels[0], marker='o')
+            axs[i].scatter(compressed_hidden_accept[:, 0], compressed_hidden_accept[:, 1], label=action_labels[1], marker='o')
+            axs[i].scatter(compressed_hidden_reject[:, 0], compressed_hidden_reject[:, 1], label=action_labels[2], marker='o')
             axs[i].plot(compressed_hidden[:, 0], compressed_hidden[:, 1], label='trajectory', color='grey', alpha=0.5)
             axs[i].set_xlabel('PC 1', fontsize=16)
             axs[i].set_ylabel('PC 2', fontsize=16)
@@ -523,7 +631,7 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
         axs[i].set_title(f'{names[i]}: PCs ~ {int(round(100*np.sum(pca.explained_variance_ratio_)))}% var.', fontsize=16)
 
     
-    axs[0].legend(fontsize=16)
+    axs[0].legend(fontsize=12)
 
     # plotting predicted labels vs. ground truth
     axs[-1].plot(test_labels, label='GT', color='red')
@@ -534,11 +642,15 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
     
     axs[-1].set_xlabel('Time steps', fontsize=16)
     axs[-1].set_yticks([0, 1, 2])
-    axs[-1].set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=12)
     axs[-1].legend(fontsize=16)
     
     axs[-1].set_title('Predicted labels vs. ground truth', fontsize=16)
     
+    if task == "DualDelayMatchSample-v0":
+        axs[-1].set_yticklabels(['No action', 'Accept', 'Reject'], fontsize=16)
+    elif task == "ContextDecisionMaking-v0":
+        axs[-1].set_yticklabels(['No action', 'choice1', 'choice2'], fontsize=16)
+
     plt.tight_layout()
     plt.show(block=True)
 
@@ -570,4 +682,21 @@ if __name__ == "__main__":
     # find_fixed_points(r"runs\light_GRU_run2", seq_len=75)
     # PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=50, dims=2)
 
-    monte_carlo_selectivity_histogram(r"runs\light_GRU_run2", simulations=512, seq_len=1000, fs=16)
+    # monte_carlo_selectivity_histogram(r"runs\light_GRU_run2", simulations=512, seq_len=1000, fs=16)
+
+    ### second task ###
+    test_models = [r"runs\\task2_light_GRU_run1", r"runs\\task2_enulight_GRU_run1", r"runs\\task2_eilight_GRU_with_l2reg"]
+    test_names = ['light GRU', 'ENU light GRU', 'EI light GRU with l2 reg']
+    task = "ContextDecisionMaking-v0"
+
+    # visualise_training_log(model_dirs=test_models, run_names=['light GRU', 'ENU light GRU', 'EI light GRU with l2 reg'], plot_to_epoch=500, log_scale=False)
+    # visualise_task_performance(test_models, seq_len=125, task=task)
+    # combined_max_activation_stem_plot(test_models, seq_len=1000)
+    # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
+    # monte_carlo_selectivity_histogram(test_models[0], simulations=1024, seq_len=1000, fs=16, task=task)
+    # visualise_selectivity(test_models[2], seq_len=1000, fs=16, task=task)
+    # timeseries_of_select_units(test_models[0], unit_inds=[3, 17, 14], 
+    #                            unit_labels=["act. selective", "c1 selective", "c2 selective"],
+    #                            task=task, seq_len=125, fs=16)
+    # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125, task=task)
+    PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=200, dims=3, task=task)
