@@ -304,10 +304,10 @@ def visualise_selectivity(model_dir, seq_len=75, fs=16, task="DualDelayMatchSamp
     axs[0].set_title('Action(positive)/Inaction(negative) selectivity of each unit', fontsize=fs)
 
     # we can repeat this, but this time looking at the reject and accept action selectivity
-    hidden_accept = hidden_activations[np.where(pred_label == 2)[0], :]
-    hidden_reject = hidden_activations[np.where(pred_label == 1)[0], :]
+    hidden_choice1 = hidden_activations[np.where(pred_label == 1)[0], :]
+    hidden_choice2 = hidden_activations[np.where(pred_label == 2)[0], :]
 
-    accept_reject_selectivity = get_binary_condition_selectivity(hidden_accept, hidden_reject)
+    accept_reject_selectivity = get_binary_condition_selectivity(hidden_choice1, hidden_choice2)
 
     # plotting
     colors = ['red' if s > 0 else 'grey' for s in active_inactive_selectivity]
@@ -472,44 +472,62 @@ def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len, t
     plt.show(block=True)
 
 
-def timeseries_of_select_units(model_dir: str, unit_inds:list[int], unit_labels: List[str], seq_len=75, fs=16, task="DualDelayMatchSample-v0", **kwargs):
+def timeseries_of_select_units(model_dirs: List[str], unit_inds:List[int], unit_labels: List[str], seq_len=75, fs=16, task="DualDelayMatchSample-v0", **kwargs):
+    """
+    produces a stacked timeseries plot of the activations of the units specified in unit_inds for each model in model_dirs
+    over the same test trial
+
+    args:
+    -----
+    model_dirs: list of strings, paths to the model directories
+    unit_inds: list of embedded integer lists, each embedded list contains the indices of the units to plot for a given model
+    unit_labels: list of strings, labels for each unit in the same manner as unit_inds
+    """
     # generating test data
     dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=1, seq_len=seq_len)
     inputs, labels = tensor_dataset_sample(dataset)
 
-    # loading model
-    net, name = initialize_model_from_config(model_dir)
-    net.eval()
-    # getting hidden activations and corresponding predictions ready for plotting
-    hidden_activations, pred_label = get_hidden_activations(net, inputs)
+    # setting up figure
+    fig, axs = plt.subplots(1 + len(model_dirs), 1, figsize=(4*(1+len(model_dirs)), 4))
     
-    # finding points where the model makes predictions
-    c1_preds = np.where(pred_label == 1)[0]
-    c2_preds = np.where(pred_label == 2)[0]
-    
-    # plotting
-    fig, axs = plt.subplots(2, 1, figsize=(10, 5))
-    for i, unit_ind in enumerate(unit_inds):
-        axs[0].plot(hidden_activations[:, unit_ind], label=unit_labels[i])
-    
-    # plotting dashed vertical lines at c1_preds and c2_preds
-    label = "c1_pred"
-    for c1 in c1_preds:
-        axs[0].axvline(x=c1, color='red', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
-        label = None
-    label = "c2_pred"
-    for c2 in c2_preds:
-        axs[0].axvline(x=c2, color='blue', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
-        label = None
+    for i, model_dir in enumerate(model_dirs):
+        # loading model
+        net, name = initialize_model_from_config(model_dir)
+        net.eval()
+        # getting hidden activations and corresponding predictions ready for plotting
+        hidden_activations, pred_label = get_hidden_activations(net, inputs)
+        
+        for j, unit_ind in enumerate(unit_inds[i]):
+            axs[i].plot(hidden_activations[:, unit_ind], label=unit_labels[i][j])
+        
 
-    axs[0].set_title(f'Timeseries activity of selected units in {name}-GRU model', fontsize=fs)
-    axs[0].set_ylabel('Activation', fontsize=fs)
-    axs[0].set_xlim([0, len(hidden_activations)])
-    axs[0].legend(fontsize=12)
+        # finding points where the model makes predictions
+        c1_preds = np.where(pred_label == 1)[0]
+        c2_preds = np.where(pred_label == 2)[0]
+        
+        # plotting dashed vertical lines at c1_preds and c2_preds
+        label = "c1_pred"
+        for c1 in c1_preds:
+            axs[i].axvline(x=c1, color='red', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
+            label = None
+        label = "c2_pred"
+        for c2 in c2_preds:
+            axs[i].axvline(x=c2, color='blue', linestyle='--', label=label, zorder=0, linewidth=4, alpha=0.5)
+            label = None
+        # formatting
+        axs[i].set_xlim([0, len(hidden_activations)])
+        axs[i].set_yticks([])
+        axs[i].set_xticks([])
+        axs[i].set_ylabel(f"{name}-GRU", fontsize=12)
 
-    visualise_task_data(inputs, ax=axs[1], fs=fs, task=task)
-    axs[1].set_title('', fontsize=fs)
+    axs[0].set_title('Timeseries activity of selected units in each model', fontsize=fs)
+    axs[0].legend(fontsize=12, loc='upper left')
+
+    visualise_task_data(inputs, ax=axs[i+1], fs=fs, task=task)
+    axs[i+1].set_title('', fontsize=fs)
+    axs[i+1].set_xticks([])
     
+    # plt.tight_layout()
     plt.show()
 
 
@@ -632,7 +650,7 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
             axs[i].set_xlabel('PC 1', fontsize=16)
             axs[i].set_ylabel('PC 2', fontsize=16)
         
-        axs[i].set_title(f'{names[i]}: PCs ~ {int(round(100*np.sum(pca.explained_variance_ratio_)))}% var.', fontsize=16)
+        axs[i].set_title(f'{names[i]}: PCs ~ {int(round(100*np.sum(pca_objs[i].explained_variance_ratio_)))}% var.', fontsize=16)
 
     
     axs[0].legend(fontsize=12)
@@ -699,8 +717,15 @@ if __name__ == "__main__":
     # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
     # monte_carlo_selectivity_histogram(test_models[0], simulations=1024, seq_len=1000, fs=16, task=task)
     # visualise_selectivity(test_models[2], seq_len=1000, fs=16, task=task)
-    # timeseries_of_select_units(test_models[0], unit_inds=[3, 17, 14], 
-    #                            unit_labels=["act. selective", "c1 selective", "c2 selective"],
-    #                            task=task, seq_len=125, fs=16)
+    
+    # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
+    # visualise_selectivity(test_models[1], seq_len=1000, fs=16, task=task)
+    # visualise_selectivity(test_models[2], seq_len=1000, fs=16, task=task)
+    unit_labels = [["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"]]
+    unit_inds = [[9, 14, 30], [10, 3, 12], [8, 24, 7]] # determined from selectivity analysis
+    timeseries_of_select_units(test_models, unit_inds=unit_inds, 
+                               unit_labels=unit_labels,
+                               task=task, seq_len=125, fs=16)
     # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125, task=task)
-    PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=200, dims=3, task=task)
+    # PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=200, dims=3, task=task)
+    # visualise_selectivity(test_models[1], seq_len=1000, fs=16, task=task)
