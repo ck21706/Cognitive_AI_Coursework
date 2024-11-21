@@ -14,7 +14,7 @@ CONFIG = {}
 RUN_FOLDER = 'runs'
 
 
-def initialize_dataset(batch_size=32, task='DualDelayMatchSample-v0'):
+def initialize_dataset(batch_size=32, task='DualDelayMatchSample-v0', seq_len=85):
     # Environment. seq_len=85 results in each sample of dataset producing two trails
     dataset = ngym.Dataset(task, env_kwargs={'dt': 100}, batch_size=batch_size, seq_len=85)
     env = dataset.env

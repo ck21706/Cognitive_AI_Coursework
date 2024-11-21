@@ -260,6 +260,67 @@ def visualise_hidden_activations(model_dir, seq_len=75, fs=16, **kwargs):
     axs[1].set_title('', fontsize=fs)
     axs[1].set_ylabel('', fontsize=fs)
 
+    plt.show(block=False)
+
+    
+def monte_carlo_selectivity_histogram(model_dir, simulations=32, seq_len=1000, fs=16, **kwargs):
+    """
+    runs a monte carlo simulation to estimate the distribution of maximum absolute selectivity values for significant units
+    in the hidden layer. 
+    """
+    # loading model
+    net, name = initialize_model_from_config(model_dir, **kwargs)
+    net.eval()
+    
+    # generating test data
+    dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=simulations, seq_len=seq_len)
+    inputs, labels = tensor_dataset_sample(dataset)
+
+    # getting hidden activations and corresponding predictions ready for plotting
+    _, hidden_activations = net(inputs, return_hidden=True)
+    hidden_activations = hidden_activations.cpu().detach().numpy().squeeze() # shape (seq_len, batch_size, hidden_size)
+    print("hidden activation shape:", hidden_activations.shape)
+    # getting network predictions
+    pred_labels = net.predict(inputs).cpu().detach().numpy().squeeze() # shape (seq_len, batch_size)
+    print("pred label shape:", pred_labels.shape)
+
+    # getting the maximum activation for each unit throughout the trial
+    max_activations = np.max(hidden_activations, axis=0) # shape (batch_size, hidden_size)
+    
+    max_mag_select = []
+    for i in range(simulations):
+        # finding units that have significant activation during any of the trails
+        significant_units = np.where(max_activations[i, :] > 0.5)[0]
+        significant_activations = hidden_activations[:, i, significant_units].squeeze() # shape (seq_len, num_significant_units)
+        pred_label = pred_labels[:, i] # shape (seq_len,) 
+        
+        # calculating the active/inactive selectivity of these units
+        active_hidden = significant_activations[np.where(pred_label != 0)[0], :]
+        passive_hidden = significant_activations[np.where(pred_label == 0)[0], :]
+        active_inactive_selectivity = get_binary_condition_selectivity(active_hidden, passive_hidden)
+        
+        # calculating the accept/reject selectivity of these units
+        accept_hidden = significant_activations[np.where(pred_label == 2)[0], :]
+        reject_hidden = significant_activations[np.where(pred_label == 1)[0], :]
+        accept_reject_selectivity = get_binary_condition_selectivity(accept_hidden, reject_hidden)
+
+        # calculating the max magnitude of selctivity across the two conditions in each unit
+        stacked_selectivity = np.stack([active_inactive_selectivity, accept_reject_selectivity], axis=0)
+        max_mag_selectivity = np.max(np.abs(stacked_selectivity), axis=0)
+        max_mag_select.append(max_mag_selectivity)
+    
+    # combining all monte carlo trials to get a long list of max selectivity values
+    max_mag_selectivity = np.concatenate(max_mag_select, axis=0)
+        
+    # plotting estimated probability distribution of selectivity magnitudes
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    ax.hist(max_mag_selectivity, bins=50, density=True)
+    ax.set_title(f'Histogram of maximum absolute selectivity of significant units\n trails={simulations}, seq_len={seq_len}', fontsize=fs)
+    ax.set_xlabel('max abs selectivity', fontsize=fs)
+    ax.set_ylabel('Density', fontsize=fs)
+    ax.tick_params(axis='x', labelsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+
     plt.show(block=True)
 
 
@@ -328,6 +389,7 @@ def combined_timeseries_of_most_sensitive_units(model_dirs:List[str], seq_len):
         active_inactive_selectivity = get_binary_condition_selectivity(hidden_active, hidden_passive)
         most_selective_unit = np.argmax(np.abs(active_inactive_selectivity))
         top_selective_units.append(most_selective_unit)
+
     
     # plotting
     fig, axs = plt.subplots(2, 1, figsize=(10, 5))
@@ -399,7 +461,7 @@ def find_fixed_points(model_dir, seq_len=100):
 def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, test_seq_len=75, dims=3):
     """
     Visualises the hidden activations of trained models corresponding to model_dirs in a 2D or 3D PCA space,
-    alongside the ground truth and predicted behaviour
+    alongside the ground truth and predicted behaviour.
     """
     # loading dataset and generating train and test data
     dataset = ngym.Dataset("DualDelayMatchSample-v0", env_kwargs={'dt': 100}, batch_size=1, seq_len=train_seq_len)
@@ -506,4 +568,6 @@ if __name__ == "__main__":
     # combined_max_activation_stem_plot(test_models, seq_len=125)
     # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125)
     # find_fixed_points(r"runs\light_GRU_run2", seq_len=75)
-    PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=50, dims=2)
+    # PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=50, dims=2)
+
+    monte_carlo_selectivity_histogram(r"runs\light_GRU_run2", simulations=512, seq_len=1000, fs=16)
