@@ -677,6 +677,32 @@ def PCA_analysis_hidden_activations(model_dirs: List[str], train_seq_len=1000, t
     plt.show(block=True)
 
 
+def regularisation_visualisation():
+    dims = np.arange(1, 64)
+
+    l2_values = []
+    l1_values = []
+
+    for dim in dims:
+        activation = np.ones(dim)
+        l2_values.append(np.sqrt(np.sum(activation**2)))
+        l1_values.append(np.sum(activation))
+    
+    fig, ax = plt.subplots()
+    ax.plot(dims, l2_values, label='l2', linewidth=3)
+    ax.plot(dims, l1_values, label='l1', linewidth=3)
+    ax.set_xlabel('Dimensionality', fontsize=16)
+    ax.set_ylabel('Norm value', fontsize=16)
+    ax.legend(fontsize=14)
+    ax.set_title('Norm values of unit vector for increasing dimensionality', fontsize=16)
+    ax.tick_params(axis='x', labelsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+
+    plt.show()
+    
+
+
+
 if __name__ == "__main__":
     test_models = [r"runs\light_GRU_run2", r"runs\enu_light_GRU_run2", r"runs\ei_light_GRU_with_l2reg"]
     
@@ -721,11 +747,15 @@ if __name__ == "__main__":
     # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
     # visualise_selectivity(test_models[1], seq_len=1000, fs=16, task=task)
     # visualise_selectivity(test_models[2], seq_len=1000, fs=16, task=task)
-    unit_labels = [["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"]]
-    unit_inds = [[9, 14, 30], [10, 3, 12], [8, 24, 7]] # determined from selectivity analysis
-    timeseries_of_select_units(test_models, unit_inds=unit_inds, 
-                               unit_labels=unit_labels,
-                               task=task, seq_len=125, fs=16)
+    # unit_labels = [["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"], ["act. selective", "c1 selective", "c2 selective"]]
+    # unit_inds = [[9, 14, 30], [10, 3, 12], [8, 24, 7]] # determined from selectivity analysis
+    # timeseries_of_select_units(test_models, unit_inds=unit_inds, 
+    #                            unit_labels=unit_labels,
+    #                            task=task, seq_len=125, fs=16)
     # combined_timeseries_of_most_sensitive_units(test_models, seq_len=125, task=task)
     # PCA_analysis_hidden_activations(test_models, train_seq_len=1000, test_seq_len=200, dims=3, task=task)
     # visualise_selectivity(test_models[1], seq_len=1000, fs=16, task=task)
+
+    # l2_reg_visualisation(dims=[2,4,8,16, 32, 64, 128])
+    # l1_reg_visualisation(dims=[2,4,8,16, 32, 64, 128])
+    regularisation_visualisation()
