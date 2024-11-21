@@ -53,7 +53,7 @@ def save_dict(dict, file_path):
         json.dump(dict, f)
 
 
-def train_run(net: nn.Module, run_dir_name: str, dataset, num_epochs: int = 100, 
+def train_run(net: nn.Module, run_dir_name: str, dataset, num_epochs: int = 100, weighted_loss: bool = False, 
               learning_rate: float = 0.001, betas: Tuple = (0.9, 0.999), l2_activation_coef: float = 0):
     """
     Trains GRU based net on inputs and labels for num_epochs epochs, using BPTT with cross entropy loss and Adam optimizer. 
@@ -79,15 +79,33 @@ def train_run(net: nn.Module, run_dir_name: str, dataset, num_epochs: int = 100,
     CONFIG['betas'] = betas
     CONFIG['l2_activation_coef'] = l2_activation_coef
 
+    # determining weights for cross entropy if required
+    
+
+    
+    if weighted_loss:
+        CONFIG['weighted_loss'] = True
+        _, labels = tensor_dataset_sample(dataset)
+        labels = labels.flatten() # we are interested only in the frequency of each class
+        frequencies = torch.bincount(labels)
+        frequencies[frequencies == 0] = 1e-6 # to avoid division by zero
+        class_weights = 1/frequencies # inverse frequency as class weights
+        class_weights = class_weights / torch.sum(class_weights) # normalizing to sum to 1
+        print("Class weights: ", class_weights)
+
+    else:
+        CONFIG['weighted_loss'] = False
+        class_weights = torch.ones(CONFIG['output_size'])
+    
     # loss function and optimizer
     if l2_activation_coef == 0:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         return_hidden = False
     else:
         return_hidden = True
         # cross entropy with l2 penalty on hidden layer activations
         def criterion(output_logits, labels, hidden_activations):
-            cross_entropy = nn.CrossEntropyLoss()
+            cross_entropy = nn.CrossEntropyLoss(weight=class_weights)
             l2_penalty = l2_activation_coef * torch.mean(torch.linalg.vector_norm(hidden_activations, ord=2, dim=1))
             return cross_entropy(output_logits, labels) + l2_penalty
             
@@ -193,5 +211,25 @@ def train_ie_light_gru():
     net = initialize_model(hidden_size=64, model_type='ei_light', e_prop=0.75)
     train_run(net, 'ei_light_GRU_with_l2reg', dataset, num_epochs=1000, learning_rate=0.01, betas=(0.9, 0.999), l2_activation_coef=0.01)
 
+# training runs task 2
+
+def train_light_gru_task2():
+    dataset = initialize_dataset(batch_size=32, task='ContextDecisionMaking-v0', seq_len=1000)
+    net = initialize_model(hidden_size=32, model_type='light')
+    train_run(net, 'task2_light_GRU_run1', dataset, num_epochs=500, learning_rate=0.01, betas=(0.9, 0.999), weighted_loss=True)
+
+def train_enu_light_gru_task2():
+    dataset = initialize_dataset(batch_size=32, task='ContextDecisionMaking-v0', seq_len=1000)
+    net = initialize_model(hidden_size=32, model_type='enu_light', unit_input_size=2*CONFIG['input_size'])
+    train_run(net, 'task2_enulight_GRU_run1', dataset, num_epochs=500, learning_rate=0.01, betas=(0.9, 0.999), weighted_loss=True)
+
+def train_ei_light_gru_l2_task2():
+    dataset = initialize_dataset(batch_size=32, task='ContextDecisionMaking-v0', seq_len=1000)
+    net = initialize_model(hidden_size=32, model_type='ei_light', e_prop=0.75)
+    train_run(net, 'task2_eilight_GRU_with_l2reg', dataset, num_epochs=500, learning_rate=0.01, betas=(0.9, 0.999), l2_activation_coef=0.001, weighted_loss=True) # reduced l2 reg
+
+
 if __name__ == "__main__":
-    train_ie_light_gru()
+    # train_light_gru_task2()
+    train_enu_light_gru_task2()
+    train_ei_light_gru_l2_task2()
