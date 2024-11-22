@@ -741,7 +741,7 @@ if __name__ == "__main__":
     # visualise_task_performance(test_models, seq_len=125, task=task)
     # combined_max_activation_stem_plot(test_models, seq_len=1000)
     # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
-    # monte_carlo_selectivity_histogram(test_models[0], simulations=1024, seq_len=1000, fs=16, task=task)
+    monte_carlo_selectivity_histogram(test_models[1], simulations=1024, seq_len=1000, fs=16, task=task)
     # visualise_selectivity(test_models[2], seq_len=1000, fs=16, task=task)
     
     # visualise_selectivity(test_models[0], seq_len=1000, fs=16, task=task)
@@ -758,4 +758,4 @@ if __name__ == "__main__":
 
     # l2_reg_visualisation(dims=[2,4,8,16, 32, 64, 128])
     # l1_reg_visualisation(dims=[2,4,8,16, 32, 64, 128])
-    regularisation_visualisation()
+    # regularisation_visualisation()
